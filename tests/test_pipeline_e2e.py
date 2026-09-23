@@ -12,15 +12,20 @@ pytest.importorskip("playwright")
 from lamoda_parser.__main__ import main  # noqa: E402
 
 PAGES = {1: ["mp002xm0aaa1", "mp002xm0aaa2"], 2: ["mp002xm0aaa3"]}
+MEDIA_HITS: list[str] = []
 STOCK = {"MP002XM0AAA1": [4, 2], "MP002XM0AAA2": [0, 1], "MP002XM0AAA3": [9, 9]}
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         u = urlparse(self.path)
+        if u.path.startswith("/img/"):
+            MEDIA_HITS.append(u.path)
+            self._send(b"\x89PNG", "image/png")
+            return
         page = int(parse_qs(u.query).get("page", ["1"])[0])
         skus = PAGES.get(page, PAGES[2])  # за пределами — та же последняя страница
-        links = "".join(f'<a href="/p/{s}/clothes-joto-futbolka/">{s}</a>' for s in skus)
+        links = "".join(f'<a href="/p/{s}/clothes-joto-futbolka/"><img src="/img/{s}.png">{s}</a>' for s in skus)
         self._send(f"<html><body><div class='grid'>{links}</div></body></html>".encode(), "text/html; charset=utf-8")
 
     def do_POST(self):  # noqa: N802
@@ -78,3 +83,4 @@ def test_collect_from_catalog(fake_lamoda, tmp_path, capsys):
     raw = next((tmp_path / "data" / "raw").glob("*.jsonl.gz"))
     assert main(["parse-raw", str(raw)]) == 0
     assert main(["sales"]) == 0
+    assert MEDIA_HITS == []  # картинки не качаем — экономия трафика прокси

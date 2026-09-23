@@ -102,6 +102,16 @@ def listing_key(url: str) -> tuple[str, str]:
     return "category", u.path
 
 
+HEAVY_RESOURCES = frozenset({"image", "media", "font"})
+
+
+async def _skip_heavy(route) -> None:
+    if route.request.resource_type in HEAVY_RESOURCES:
+        await route.abort()
+    else:
+        await route.continue_()
+
+
 async def crawl(
     urls: list[str],
     max_pages: int = 5,
@@ -122,6 +132,9 @@ async def crawl(
             user_agent=USER_AGENT, locale="ru-RU", timezone_id="Europe/Moscow", viewport={"width": 1920, "height": 1080}
         )
         await ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        if os.environ.get("LAMODA_LOAD_MEDIA") != "1":
+            # картинки/видео/шрифты — основной трафик страницы; через прокси с оплатой за ГБ это деньги
+            await ctx.route("**/*", _skip_heavy)
         page = await ctx.new_page()
         payload_skus: list[str] = []
 
