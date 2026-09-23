@@ -54,8 +54,9 @@ def estimate_daily_sales(snapshots: list[Snapshot]) -> list[DailySale]:
     for (sku, _size), rows in by_size.items():
         rows.sort(key=lambda r: r.snap_date)
         for r in rows:
+            d = day(r.snap_date, sku)  # запись на каждый день снимка, даже без остатка
             if r.in_stock:
-                day(r.snap_date, sku).in_stock = True
+                d.in_stock = True
         for prev, cur in zip(rows, rows[1:]):
             d = day(cur.snap_date, sku)
             if prev.stock is None or cur.stock is None:

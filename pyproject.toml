@@ -10,6 +10,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+pg = ["psycopg[binary]>=3.1"]
 
 [build-system]
 requires = ["setuptools>=68"]
