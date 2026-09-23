@@ -55,8 +55,12 @@ def is_challenge(html: str) -> bool:
     return any(m in html for m in CHALLENGE_MARKERS)
 
 
+CAPTCHA_MARKERS = ("sp_rotated_captcha", "captcha-wrap", "captchaIntGen")
+
+
 def is_captcha(html: str) -> bool:
-    return '"is_captcha":true' in html.replace(" ", "")
+    """Настоящая капча: флаг в заглушке или страница «поверните картинку» (sp_rotated_captcha)."""
+    return '"is_captcha":true' in html.replace(" ", "") or any(m in html for m in CAPTCHA_MARKERS)
 
 
 def page_state(html: str) -> str:

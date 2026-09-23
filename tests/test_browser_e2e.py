@@ -25,6 +25,9 @@ def test_page_state_on_real_challenge():
     assert page_state(REAL_CHALLENGE) == "challenge"
     assert page_state(REAL_CHALLENGE.replace('"is_captcha":false', '"is_captcha":true')) == "captcha"
     assert page_state("<title>Запрос отклонен</title>") == "blocked"
+    # реальная страница капчи с поворотом картинки (23.09.2026), без маркеров заглушки
+    rotated = '<div class="captcha-wrap"><script src="./sp_rotated_captcha/js/bundle.js"></script></div>'
+    assert page_state(rotated) == "captcha"
     assert page_state("<html><h1>Мужская одежда</h1></html>") == "ok"
 
 
