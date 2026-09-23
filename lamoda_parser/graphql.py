@@ -27,6 +27,8 @@ from typing import Any, Iterable
 
 import httpx
 
+from .relay import effective_proxy
+
 log = logging.getLogger(__name__)
 
 GRAPHQL_URL = "https://www.lamoda.ru/goapi/v2/catalog/graphql/products/"
@@ -174,7 +176,7 @@ class LamodaGraphQL:
         self.connect_retries = connect_retries
         self.client = httpx.Client(
             headers=HEADERS,
-            proxy=proxy if proxy is not None else (os.environ.get("LAMODA_PROXY") or None),
+            proxy=proxy if proxy is not None else effective_proxy(),
             # короткий connect: из РФ-дата-центра вход прокси доступен не с каждой попытки
             timeout=httpx.Timeout(timeout, connect=connect_timeout),
             transport=transport,

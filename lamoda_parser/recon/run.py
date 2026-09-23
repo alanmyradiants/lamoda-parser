@@ -29,6 +29,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from ..browser import wait_challenge_async
+from ..relay import effective_proxy
 from .inspect import Findings, inspect_json, is_blocked, merge
 
 USER_AGENT = (
@@ -56,7 +57,7 @@ class PageResult:
 
 
 def _proxy() -> str | None:
-    return os.environ.get("LAMODA_PROXY") or None
+    return effective_proxy()
 
 
 def _slug(url: str) -> str:
@@ -149,7 +150,15 @@ async def probe_browser(results: list[PageResult], out_dir: Path, headful: bool)
 
             page.on("response", lambda r: pending.append(asyncio.ensure_future(on_response(r))))
             try:
-                resp = await page.goto(res.url, wait_until="domcontentloaded", timeout=60_000)
+                resp = None
+                for nav in range(5):  # вход прокси может не ответить с первой попытки
+                    try:
+                        resp = await page.goto(res.url, wait_until="domcontentloaded", timeout=60_000)
+                        break
+                    except Exception:  # noqa: BLE001
+                        if nav == 4:
+                            raise
+                        await asyncio.sleep(2)
                 res.browser_status = resp.status if resp else None
                 # заглушка Servicepipe: ждём, пока JS-проверка пропустит на настоящую страницу
                 res.challenge = await wait_challenge_async(page, 45.0)

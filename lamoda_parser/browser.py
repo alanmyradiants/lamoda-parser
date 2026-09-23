@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 
 from .graphql import BlockedError, LamodaGraphQL, parse_envelope
 from .recon.inspect import is_blocked
+from .relay import effective_proxy
 
 log = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ def page_state(html: str) -> str:
 
 
 def proxy_config() -> dict[str, str] | None:
-    raw = os.environ.get("LAMODA_PROXY")
+    raw = effective_proxy()
     if not raw:
         return None
     u = urlparse(raw)
