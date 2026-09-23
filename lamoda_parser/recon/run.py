@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from ..browser import wait_challenge_async
 from .inspect import Findings, inspect_json, is_blocked, merge
 
 USER_AGENT = (
@@ -48,6 +49,7 @@ class PageResult:
     browser_status: int | None = None
     browser_blocked: bool | None = None
     browser_error: str | None = None
+    challenge: str | None = None
     api_calls: list[dict[str, Any]] = field(default_factory=list)
     state_globals: list[str] = field(default_factory=list)
     findings: Findings = field(default_factory=Findings)
@@ -149,12 +151,14 @@ async def probe_browser(results: list[PageResult], out_dir: Path, headful: bool)
             try:
                 resp = await page.goto(res.url, wait_until="domcontentloaded", timeout=60_000)
                 res.browser_status = resp.status if resp else None
+                # заглушка Servicepipe: ждём, пока JS-проверка пропустит на настоящую страницу
+                res.challenge = await wait_challenge_async(page, 45.0)
                 # даём догрузиться XHR (размеры, наличие часто приходят отдельно)
                 await page.wait_for_timeout(5_000)
                 await page.mouse.wheel(0, 3_000)
                 await page.wait_for_timeout(3_000)
                 html = await page.content()
-                res.browser_blocked = is_blocked(html)
+                res.browser_blocked = is_blocked(html) or res.challenge != "ok"
                 (out_dir / f"{res.label}_browser.html").write_text(html, encoding="utf-8")
                 await page.screenshot(path=str(out_dir / f"{res.label}.png"), full_page=False)
                 for block in json_ld_blocks(html):
@@ -198,7 +202,7 @@ def render_report(results: list[PageResult]) -> str:
             + (f", ошибка {r.http_error}" if r.http_error else "")
         )
         lines.append(
-            f"- Браузер: статус {r.browser_status}, блок {r.browser_blocked}"
+            f"- Браузер: статус {r.browser_status}, блок {r.browser_blocked}, JS-проверка: {r.challenge}"
             + (f", ошибка {r.browser_error}" if r.browser_error else "")
         )
         lines.append(f"- Состояние страницы: {', '.join(r.state_globals) or 'нет'}")

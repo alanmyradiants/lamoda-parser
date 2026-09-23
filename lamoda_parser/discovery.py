@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import random
 import re
 from dataclasses import dataclass, field
@@ -18,14 +17,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from .recon.inspect import is_blocked
-from .recon.run import USER_AGENT, _playwright_proxy
+from .browser import HEAVY_RESOURCES, WEBDRIVER_JS, context_kwargs, launch_kwargs, load_media, wait_challenge_async
 
 log = logging.getLogger(__name__)
 
 SKU_IN_URL = re.compile(r"/p/([a-z0-9]{8,20})/", re.I)
 SKU_RE = re.compile(r"^[A-Z]{2}[A-Z0-9]{6,18}$")
-CHALLENGE_MARKERS = ("Пожалуйста, пройдите проверку", "SmartCaptcha")
 
 
 @dataclass
@@ -102,9 +99,6 @@ def listing_key(url: str) -> tuple[str, str]:
     return "category", u.path
 
 
-HEAVY_RESOURCES = frozenset({"image", "media", "font"})
-
-
 async def _skip_heavy(route) -> None:
     if route.request.resource_type in HEAVY_RESOURCES:
         await route.abort()
@@ -117,22 +111,17 @@ async def crawl(
     max_pages: int = 5,
     headful: bool = False,
     delay: float = 4.0,
+    nav_retries: int = 5,
+    challenge_timeout: float = 45.0,
 ) -> list[Listing]:
     from playwright.async_api import async_playwright
 
     listings: list[Listing] = []
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(
-            headless=not headful,
-            proxy=_playwright_proxy(),
-            executable_path=os.environ.get("LAMODA_CHROMIUM") or None,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
-        ctx = await browser.new_context(
-            user_agent=USER_AGENT, locale="ru-RU", timezone_id="Europe/Moscow", viewport={"width": 1920, "height": 1080}
-        )
-        await ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        if os.environ.get("LAMODA_LOAD_MEDIA") != "1":
+        browser = await pw.chromium.launch(**launch_kwargs(headful))
+        ctx = await browser.new_context(**context_kwargs())
+        await ctx.add_init_script(WEBDRIVER_JS)
+        if not load_media():
             # картинки/видео/шрифты — основной трафик страницы; через прокси с оплатой за ГБ это деньги
             await ctx.route("**/*", _skip_heavy)
         page = await ctx.new_page()
@@ -148,6 +137,23 @@ async def crawl(
 
         page.on("response", lambda r: asyncio.ensure_future(on_response(r)))
 
+        async def open_listing(url: str) -> str:
+            """Открыть страницу (с повторами при обрыве прокси) и пройти JS-проверку."""
+            last: Exception | None = None
+            for _ in range(nav_retries):
+                try:
+                    await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+                except Exception as e:  # noqa: BLE001
+                    last = e
+                    await asyncio.sleep(2)
+                    continue
+                state = await wait_challenge_async(page, challenge_timeout)
+                if state != "challenge":
+                    return state
+            if last is not None:
+                raise last
+            return "challenge"
+
         for url in urls:
             source, query = listing_key(url)
             listing = Listing(source, query)
@@ -158,16 +164,15 @@ async def crawl(
                 listing.pages.append(lp)
                 payload_skus.clear()
                 try:
-                    await page.goto(lp.url, wait_until="domcontentloaded", timeout=60_000)
-                    await page.wait_for_timeout(3_000)
+                    state = await open_listing(lp.url)
+                    if state != "ok":
+                        lp.blocked = True
+                        log.error("антибот на %s: %s", lp.url, state)
+                        break
+                    await page.wait_for_timeout(2_000)
                     for _ in range(4):  # ленивые плитки догружаются при прокрутке
                         await page.mouse.wheel(0, 4_000)
                         await page.wait_for_timeout(800)
-                    html = await page.content()
-                    if is_blocked(html) or any(m in html for m in CHALLENGE_MARKERS):
-                        lp.blocked = True
-                        log.error("блок антибота на %s", lp.url)
-                        break
                     hrefs = await page.eval_on_selector_all("a[href*='/p/']", "els => els.map(e => e.getAttribute('href'))")
                     lp.skus = skus_from_links(hrefs) or list(dict.fromkeys(payload_skus))
                 except Exception as e:  # noqa: BLE001

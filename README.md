@@ -20,6 +20,14 @@
 артикул автоматически отсекается делением батча.
 Рейтинга и отзывов в схеме нет; продавца и категорию проверяем командой `probe --fields`.
 
+**Защита Lamoda (проверено 23.09.2026).** Сайт закрыт антиботом Servicepipe:
+IP дата-центров (в т.ч. российских, Timeweb) получают «Запрос отклонен»; домашний IP
+через резидентный прокси получает страницу с JS-проверкой (`"is_captcha": false`).
+Поэтому карточки берутся через настоящий Chromium (`--browser` или `LAMODA_BROWSER=1`):
+браузер проходит проверку, получает cookie и вызывает GraphQL через `fetch()` изнутри
+страницы; когда пропуск истекает — проходит проверку заново. Нужен российский
+резидентный/мобильный прокси в `LAMODA_PROXY`.
+
 **Список артикулов и позиции** — только со страниц каталога/поиска (у GraphQL нет
 поиска). Эти страницы закрыты антиботом сильнее: нужен российский IP и браузер.
 
@@ -30,8 +38,8 @@ git clone https://github.com/alanmyradiants/lamoda-parser.git && cd lamoda-parse
 bash deploy/setup_vps.sh
 . .venv/bin/activate
 
-# 1. Работает ли GraphQL с этого IP и видны ли остатки числом:
-python -m lamoda_parser probe MP002XM1RMM3 --fields
+# 1. Проходит ли браузер защиту и видны ли остатки числом (прокси — в .env):
+export $(grep -v '^#' .env | xargs) && python -m lamoda_parser probe --browser RTLAEY634001
 
 # 2. Работает ли каталог:
 python -m lamoda_parser discover 'https://www.lamoda.ru/c/477/clothes-muzhskaya-odezhda/' --pages 2

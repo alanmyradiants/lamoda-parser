@@ -25,7 +25,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from .discovery import crawl, read_skus_file
-from .graphql import LamodaGraphQL, parse_product
+from .graphql import LamodaError, LamodaGraphQL, parse_product
 from .sales import estimate_daily_sales, summarize
 from .storage import Storage
 
@@ -33,12 +33,26 @@ log = logging.getLogger("lamoda_parser")
 DEFAULT_DB = "sqlite:///data/lamoda.db"
 
 
+def _gql(args: argparse.Namespace, **kw) -> LamodaGraphQL:
+    """Через браузер (JS-проверка Servicepipe) или простым HTTP."""
+    if args.browser or os.environ.get("LAMODA_BROWSER") == "1":
+        from .browser import BrowserGraphQL
+
+        return BrowserGraphQL(headful=args.headful, **kw)
+    return LamodaGraphQL(**kw)
+
+
 def _storage() -> Storage:
     return Storage(os.environ.get("DATABASE_URL") or DEFAULT_DB)
 
 
 def cmd_probe(args: argparse.Namespace) -> int:
-    with LamodaGraphQL(retries=1, delay=args.delay) as gql:
+    try:
+        gql = _gql(args, retries=1, delay=args.delay)
+    except LamodaError as e:
+        print(f"✗ {e}")
+        return 1
+    with gql:
         cards, failed = gql.fetch([args.sku])
         if not cards:
             print(f"✗ карточка {args.sku} не получена (failed={failed}). Нет доступа или артикул неверный.")
@@ -111,7 +125,13 @@ def cmd_collect(args: argparse.Namespace) -> int:
             return 1
 
         log.info("снимаю %d карточек", len(skus))
-        with LamodaGraphQL(batch_size=args.batch, delay=args.delay) as gql:
+        try:
+            gql = _gql(args, batch_size=args.batch, delay=args.delay)
+        except LamodaError as e:
+            st.finish_run(run_id, 0, len(skus), blocked + 1, f"браузер: {e}")
+            print(f"✗ {e}")
+            return 2
+        with gql:
             cards, failed = gql.fetch(skus)
 
         raw_dir = Path(args.raw_dir)
@@ -180,6 +200,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("sku")
     p.add_argument("--fields", action="store_true", help="перебрать дополнительные поля схемы")
     p.add_argument("--delay", type=float, default=1.0)
+    p.add_argument("--browser", action="store_true", help="запросы из Chromium (обход JS-проверки); или LAMODA_BROWSER=1")
+    p.add_argument("--headful", action="store_true", help="браузер с окном (на сервере — через xvfb-run)")
     p.set_defaults(fn=cmd_probe)
 
     p = sub.add_parser("init-db", help="создать таблицы")
@@ -203,6 +225,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--raw-dir", default="data/raw")
     p.add_argument("--sales-days", type=int, default=3, help="за сколько дней пересчитать продажи")
     p.add_argument("--headful", action="store_true")
+    p.add_argument("--browser", action="store_true", help="карточки через Chromium (обход JS-проверки); или LAMODA_BROWSER=1")
     p.set_defaults(fn=cmd_collect)
 
     p = sub.add_parser("sales", help="пересчитать продажи и показать топ")
