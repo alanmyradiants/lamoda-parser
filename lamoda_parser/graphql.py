@@ -163,16 +163,20 @@ class LamodaGraphQL:
         delay: float = 1.5,
         retries: int = 3,
         timeout: float = 30.0,
+        connect_timeout: float = 6.0,
+        connect_retries: int = 15,
         transport: httpx.BaseTransport | None = None,
     ):
         self.url = url or os.environ.get("LAMODA_GRAPHQL_URL") or GRAPHQL_URL
         self.batch_size = batch_size
         self.delay = delay
         self.retries = retries
+        self.connect_retries = connect_retries
         self.client = httpx.Client(
             headers=HEADERS,
             proxy=proxy if proxy is not None else (os.environ.get("LAMODA_PROXY") or None),
-            timeout=timeout,
+            # короткий connect: из РФ-дата-центра вход прокси доступен не с каждой попытки
+            timeout=httpx.Timeout(timeout, connect=connect_timeout),
             transport=transport,
             trust_env=transport is None,
         )
@@ -195,10 +199,21 @@ class LamodaGraphQL:
 
     def query(self, query: str) -> list[dict[str, Any]]:
         last_exc: Exception | None = None
-        for attempt in range(self.retries + 1):
+        attempt = 0
+        connect_fails = 0
+        while True:
             self._pace()
             try:
                 r = self.client.post(self.url, json={"query": query})
+            except (httpx.ConnectTimeout, httpx.ConnectError, httpx.ProxyError) as e:
+                # не достучались до прокси/сайта — запрос не ушёл, повторяем быстро и отдельно от ретраев ответа
+                last_exc = e
+                connect_fails += 1
+                if connect_fails <= self.connect_retries:
+                    log.debug("нет соединения (%s), повтор %d", e, connect_fails)
+                    time.sleep(1.0)
+                    continue
+                break
             except httpx.TransportError as e:
                 last_exc = e
             else:
@@ -211,10 +226,12 @@ class LamodaGraphQL:
                         last_exc = BlockedError(f"HTTP {r.status_code}, не JSON: {r.text[:200]}")
                     else:
                         return parse_envelope(payload)  # QueryError не повторяем
-            if attempt < self.retries:
-                backoff = min(60.0, 5.0 * 2**attempt)
-                log.warning("попытка %d не удалась (%s), жду %.0f с", attempt + 1, last_exc, backoff)
-                time.sleep(backoff)
+            if attempt >= self.retries:
+                break
+            backoff = min(60.0, 5.0 * 2**attempt)
+            log.warning("попытка %d не удалась (%s), жду %.0f с", attempt + 1, last_exc, backoff)
+            time.sleep(backoff)
+            attempt += 1
         if isinstance(last_exc, LamodaError):
             raise last_exc
         raise BlockedError(f"сеть: {last_exc}") from last_exc

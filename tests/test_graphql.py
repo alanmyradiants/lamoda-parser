@@ -89,7 +89,7 @@ def test_network_error_becomes_blocked():
     def handler(request):
         raise httpx.ConnectError("boom")
 
-    with make_client(handler) as gql:
+    with make_client(handler, connect_retries=0) as gql:
         with pytest.raises(BlockedError):
             gql.query(build_query(["AA00000001"]))
         assert gql.fetch(["AA00000001"]) == ([], ["AA00000001"])
@@ -106,3 +106,32 @@ def test_probe_fields():
         res = gql.probe_fields("AA00000001", ["seller_name", "rating"])
     assert res["seller_name"] == "JOTO"
     assert res["rating"].startswith("✗")
+
+
+def test_flaky_proxy_connect_is_retried_quickly(monkeypatch):
+    monkeypatch.setattr("lamoda_parser.graphql.time.sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        if calls["n"] < 5:  # вход прокси отвечает не с каждой попытки
+            raise httpx.ConnectTimeout("timed out")
+        return httpx.Response(200, json={"error": None, "result": [card("AA00000001", [2, 0, 1])]})
+
+    with make_client(handler) as gql:  # retries=0: ответные ошибки не повторяем, а соединение — да
+        cards, failed = gql.fetch(["AA00000001"])
+    assert [c.sku for c in cards] == ["AA00000001"] and failed == []
+    assert calls["n"] == 5
+
+
+def test_connect_retries_are_bounded(monkeypatch):
+    monkeypatch.setattr("lamoda_parser.graphql.time.sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        raise httpx.ConnectTimeout("timed out")
+
+    with make_client(handler, connect_retries=3) as gql:
+        assert gql.fetch(["AA00000001"]) == ([], ["AA00000001"])
+    assert calls["n"] == 4
